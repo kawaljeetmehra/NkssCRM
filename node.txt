@@ -1,0 +1,307 @@
+Q1. Passport Auth Process with JWT?
+A:  1. config/passport.js:
+                const passport = require('passport');
+                const LocalStrategy = require('passport-local').Strategy;
+                const JwtStrategy = require('passport-jwt').Strategy;
+                const ExtractJwt = require('passport-jwt').ExtractJwt;
+                const AuthController = require("../controller/AuthController");
+
+                const localStrategyCallback = (username, password, done) => {
+                    AuthController.fetch()
+                        .then(users => {
+                            const user = users.find(u => u.username === username && u.password === password);
+                            if (user) {
+                                return done(null, user);
+                            } else {
+                                console.log('Invalid username or password:', username);
+                                return done(null, false, { message: 'Invalid username or password' });
+                            }
+                        })
+                        .catch(error => {
+                            console.error('Error fetching users:', error);
+                            return done(error);
+                        });
+                };
+
+                const jwtOptions = {
+                    jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+                    secretOrKey: 'your-secret-key',
+                };
+
+                const jwtStrategyCallback = (payload, done) => {
+                    AuthController.fetch()
+                        .then(users => {
+                            const user = users.find(u => u.RecordID === payload.sub);
+                            if (user) {
+                                return done(null, user);
+                            } else {
+                                return done(null, false, { message: 'Invalid token' });
+                            }
+                        })
+                        .catch(error => {
+                            console.error('Error fetching users:', error);
+                            return done(error);
+                        });
+                };
+
+                passport.use(new LocalStrategy(localStrategyCallback));
+                passport.use(new JwtStrategy(jwtOptions, jwtStrategyCallback));
+
+                passport.serializeUser((user, done) => {
+                    done(null, user.id);
+                });
+
+                passport.deserializeUser((id, done) => {
+                    AuthController.fetch()
+                        .then(users => {
+                            const user = users.find(u => u.id === id);
+                            if (user) {
+                                done(null, user);
+                            } else {
+                                done(new Error('User not found'));
+                            }
+                        })
+                        .catch(error => {
+                            console.error('Error fetching users:', error);
+                            done(error);
+                        });
+                });
+
+                module.exports = passport;
+    
+    2. config/multer.js:
+                const multer = require('multer');
+
+                const storage = multer.diskStorage({
+                    destination: function(req, file, cb) {
+                        cb(null, 'uploads/');
+                    },
+                    filename: function(req, file, cb) {
+                        cb(null, Date.now() + '-' + file.originalname);
+                    }
+                });
+
+                const upload = multer({ storage: storage });
+
+                module.exports = upload;
+
+    3. routes/auth.js:
+                const express = require('express');
+                const bodyParser = require('body-parser');
+                const passport = require('passport');
+                const jwt = require('jsonwebtoken');
+                const upload = require('../config/multer');
+                const AuthController = require("../controller/AuthController");
+                const passportAuth = require('../config/passport');
+                const session = require('express-session');
+
+                const app = express();
+
+                app.use(session({
+                    secret: 'your-session-secret', 
+                    resave: false,
+                    saveUninitialized: false
+                }));
+                app.use(passport.session());
+                app.use(bodyParser.json());
+                app.use(bodyParser.urlencoded({ extended: true }));
+                app.use(passport.initialize());
+
+                const jwtOptions = {
+                    secretOrKey: 'your-secret-key',
+                };
+
+                app.post('/login', (req, res, next) => {
+                    passport.authenticate('local', { session: true }, (err, user, info) => {
+                        if (err || !user) {
+                            return res.status(401).json({ status:"401", message: 'Unauthorized' });
+                        }
+                        req.login(user, { session: false }, (err) => {
+                            if (err) {
+                                res.send(err);
+                            }
+                            const token = jwt.sign({ sub: user.RecordID }, jwtOptions.secretOrKey);
+                            return res.json({ token });
+                        });
+                    })(req, res, next);
+                }); 
+
+
+                app.post('/register', upload.single('file'), (req, res) => {
+                    const imagePath = req.protocol + '://' + req.get('host') + '/' + req.file.path;
+                    AuthController.register(req, imagePath, (err, data) => {
+                        if(err){
+                            res.json({status:500, message: "Internal Server Error : "+err.message})
+                        }
+                        res.json({status:200, message:"success"})
+                    })
+                });
+
+                module.exports = app;
+    
+    4. middleware/auth.js:
+                const passport = require('passport');
+
+                module.exports = (req, res, next) => {
+                    passport.authenticate('jwt', { session: false }, (err, user, info) => {
+                        if (err || !user) {
+                            if (info && info.name === 'JsonWebTokenError') {
+                                return res.status(401).json({ status: 401, message: "Invalid token" });
+                            }
+                            return res.status(401).json({ status: 401, message: "Unauthorized" });
+                        }
+                        req.user = user; 
+                        next(); 
+                    })(req, res, next);
+                }
+
+    5. routes/api.js:
+                const express = require("express");
+                const app = express.Router();
+                const VerifyToken =  require("../middleware/auth");
+
+                app.post("/profile", [VerifyToken], (req, res) => {
+                        const userData = req.user;
+                        return res.json({ user: userData });
+                    }
+                );
+
+                module.exports = app;
+    
+    6. routes/web.js:
+                const express = require("express");
+                const app = express.Router();
+                const AuthRoutes = require("./auth");
+                const ApiRoutes = require("./api");
+
+                app.use("/api/auth", AuthRoutes);
+                app.use("/api", ApiRoutes);
+
+                module.exports = app;
+
+    7. index.js:
+                const express = require('express')
+                const app = express()
+
+                const routes = require("./routes/web");
+                app.use(routes);
+
+                const port = 3000
+                app.listen(port, () => {
+                    console.log(`Server Listening on port ${port}`)
+                })
+
+
+Q2. What is assertion testing in Node.js?
+A: In Node.js, assertion testing is a technique used to verify that certain conditions in your code hold true.
+   Node.js provides an 'assert' module as part of its standard library, which offers functions to perform assertions. 
+   Example:
+        const assert = require('assert');
+
+        // Example function to test
+        function add(a, b) {
+           return a + b;
+        }
+
+        // Test cases
+        console.log(assert.equal(add(2, 3), 5, '2 + 3 should equal 5')); //undefined
+        console.log(assert.equal(add(1, 1), 0, '-1 + 1 should equal 0')) //throw AssertionError [ERR_ASSERTION]: -1 + 1 should equal 0
+
+
+Q3. What is Corepack in Node.js?
+A: Corepack is a package manager for Node.js that aims to provide a better alternative to the default npm client.
+   Like an npm, it is also a package manager which aims to provide speed, reliability, and security of package installations by utilizing PnP (Plug'n'Play) and other optimizations.
+   Example:
+      1. npm install -g corepack
+      2. mkdir my-project
+      3. cd my-project
+      4. corepack init
+      5. corepack add express
+      6. corepack run start
+
+   If you decide you no longer want to use Corepack, you can uninstall it from your system:
+    npm uninstall -g corepack
+
+
+Q4. What are Performance Hooks?
+A:  Performance hooks, provided by the perf_hooks module (build-in module) in Node.js, are a set of tools and APIs that allow developers to monitor and analyze the performance of their applications.
+    These hooks enable the measurement of various performance metrics such as execution time, memory usage, event loop latency, and more.
+    By using performance hooks, developers can identify performance by checking time taken during execution of the code, thus it helps to improve performance.
+    Example:
+        const { performance } = require('perf_hooks');
+
+        // Measure the elapsed time for a task
+        const start = performance.now();
+        // Perform a task (e.g., a computation)
+        for (let i = 0; i < 1000000; i++) {
+            Math.sqrt(i);
+        }
+        const end = performance.now();
+
+        // Calculate the elapsed time
+        const elapsedTime = end - start;
+        console.log(`Elapsed time: ${elapsedTime} milliseconds`);
+
+
+Q5. What is Readline in Node.js?
+A:  In Node.js, readline is a built-in module provides several classes and functions for reading input and outputting data to the terminal in a user-friendly way.
+    It is very helpful for asking some questoins and other things via terminal.
+    Example 1:
+            const readline = require('readline');
+
+            // Create a readline interface
+            const rl = readline.createInterface({
+                input: process.stdin,
+                output: process.stdout
+            });
+
+            // Ask the user a question
+            rl.question('What is your name? ', (answer) => {
+                // Print the user's response
+                console.log(`Hello, ${answer}!`);
+                
+                // Close the interface
+                rl.close();
+            });
+
+    Example 2 (All Methods):
+             const readline = require('readline');
+
+            // Create a readline interface
+            const rl = readline.createInterface({
+                input: process.stdin,
+                output: process.stdout
+            });
+
+            // Method 1: rl.question()
+            rl.question('What is your name? ', (answer) => {
+                console.log(`Hello, ${answer}!`);
+                
+                // Method 2: rl.close()
+                rl.close();
+            });
+
+            // Method 3: rl.pause()
+            rl.pause();
+
+            // Method 4: rl.resume()
+            setTimeout(() => {
+                rl.resume();
+                console.log('Resumed reading input...');
+            }, 5000);
+
+            // Method 5: rl.write()
+            setTimeout(() => {
+                rl.write('This is an example of writing to the terminal.\n');
+            }, 4000);
+
+            // Event handlers
+            rl.on('line', (input) => {
+                // Event handler for when the user inputs a line of text
+                console.log(`Received input: ${input}`);
+            });
+
+            rl.on('close', () => {
+                // Event handler for when the interface is closed
+                console.log('Interface closed.');
+            });
